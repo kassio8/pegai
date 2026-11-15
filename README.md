@@ -1,6 +1,6 @@
-![Baixaryt](assets/banner.svg)
+![Pegaí](assets/banner-Pegai.svg)
 
-# Baixaryt
+# Pegaí
 
 Script de terminal para baixar vídeos do YouTube ou extrair áudio em MP3.
 
