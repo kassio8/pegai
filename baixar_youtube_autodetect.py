@@ -301,9 +301,3 @@ if __name__ == "__main__":
         if resposta not in ("s", "sim"):
             print("Saindo. Até logo!")
             break
-
-
-
-
-
-#Script feito por Kássio Lima (ks) e ajuda do Copilot
