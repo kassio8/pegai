@@ -93,6 +93,10 @@ python3 -m unittest -v test_baixar_youtube_autodetect.py
 python3 -m py_compile baixar_youtube_autodetect.py test_baixar_youtube_autodetect.py
 ```
 
+## Licença
+
+Este projeto usa a licença MIT. Consulte o arquivo [LICENSE](LICENSE).
+
 ## Problemas comuns
 
 - **Python antigo:** instale Python 3.11 ou superior.
