@@ -5,11 +5,14 @@ Uso: python baixar_youtube_autodetect.py
 Na primeira execução, cria uma venv e instala yt-dlp, Deno e FFmpeg portátil.
 """
 
-import subprocess
-import sys
+import errno
+import ntpath
 import os
 import shutil
-from pathlib import Path
+import subprocess
+import sys
+from pathlib import Path, PureWindowsPath
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 INSTALL_PACKAGES = ("yt-dlp[default,deno]", "imageio-ffmpeg")
 REQUIRED_DISTRIBUTIONS = ("yt-dlp", "yt-dlp-ejs", "deno", "imageio-ffmpeg")
@@ -177,14 +180,72 @@ def listar_qualidades(url):
         return qualidades, info.get("title", "video")
 
 
-def _baixar(url, pasta, opcoes_formato):
+def _url_playlist(url):
+    partes = urlsplit(url if "://" in url else "//" + url)
+    host = partes.hostname or ""
+    if host != "youtu.be" and host != "youtube.com" and not host.endswith(".youtube.com"):
+        return None
+    consulta = parse_qs(partes.query)
+    if not consulta.get("list"):
+        return None
+    if partes.path.rstrip("/") != "/playlist":
+        tem_video = (consulta.get("v") or host == "youtu.be"
+                     or partes.path.startswith(("/shorts/", "/live/", "/embed/")))
+        if not tem_video:
+            return None
+        while True:
+            escolha = input("1. Só este vídeo (Enter)\n2. Playlist inteira\nEscolha: ").strip()
+            if escolha in ("", "1"):
+                return None
+            if escolha == "2":
+                break
+            print("Escolha 1 ou 2.")
+    return "https://www.youtube.com/playlist?" + urlencode({"list": consulta["list"][0]})
+
+
+def _ler_playlist(url):
+    import yt_dlp
+
+    with yt_dlp.YoutubeDL({"extract_flat": "in_playlist", "quiet": True}) as ydl:
+        playlist = ydl.extract_info(url, download=False)
+    if not playlist or not playlist.get("entries"):
+        raise ValueError("A playlist está vazia ou não tem itens visíveis.")
+    return playlist
+
+
+def _nome_pasta_playlist(playlist):
+    from yt_dlp.utils import sanitize_filename
+
+    nome = sanitize_filename(playlist.get("title") or "Playlist", is_id=False)
+    nome = nome.encode("utf-8")[:180].decode("utf-8", "ignore").strip(" .") or "Playlist"
+    reservado = ntpath.isreserved(nome) if hasattr(ntpath, "isreserved") else PureWindowsPath(nome).is_reserved()
+    if reservado:
+        nome = "_" + nome
+    return nome
+
+
+def _orientacao_destino(erro):
+    while erro is not None:
+        if isinstance(erro, OSError):
+            if erro.errno == errno.ENOSPC:
+                return "Espaço insuficiente. Libere espaço ou escolha outra pasta."
+            if isinstance(erro, PermissionError) or erro.errno == errno.EROFS:
+                return "Sem permissão para gravar. Escolha uma pasta com acesso de escrita."
+            if isinstance(erro, (NotADirectoryError, FileExistsError, IsADirectoryError)):
+                return "O caminho de destino conflita com um arquivo ou pasta. Escolha outra pasta."
+        erro = erro.__cause__ or erro.__context__
+    return None
+
+
+def _baixar(url, pasta, opcoes_formato, playlist=None):
     import yt_dlp
 
     os.makedirs(pasta, exist_ok=True)
 
     ydl_opts = {
         **opcoes_formato,
-        "outtmpl": os.path.join(pasta, NOME_ARQUIVO),
+        "paths": {"home": os.path.abspath(pasta)},
+        "outtmpl": NOME_ARQUIVO,
         "progress_hooks": [progresso_hook],
         "noplaylist": True,
     }
@@ -192,16 +253,52 @@ def _baixar(url, pasta, opcoes_formato):
     if ffmpeg_path:
         ydl_opts["ffmpeg_location"] = ffmpeg_path
 
+    if playlist is not None:
+        largura = max(2, len(str(len(playlist["entries"]))))
+        ydl_opts["outtmpl"] = f"%(playlist_index)0{largura}d - {NOME_ARQUIVO}"
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+        if playlist is None:
+            if ydl.download([url]):
+                raise RuntimeError("O yt-dlp não conseguiu concluir o download.")
+            return
+        _baixar_faixas(ydl, playlist, pasta)
 
 
-def baixar_video(url, qualidade="bestvideo*+bestaudio/best", pasta="downloads"):
+def _baixar_faixas(ydl, playlist, pasta):
+    from yt_dlp.utils import YoutubeDLError
+
+    total = len(playlist["entries"])
+    falhas = []
+    salvos = 0
+    for numero, faixa in enumerate(playlist["entries"], 1):
+        titulo = (faixa or {}).get("title") or (faixa or {}).get("id") or "Faixa indisponível"
+        print(f"\n{numero}/{total} — {titulo}", flush=True)
+        contexto = {"playlist": playlist.get("title") or "Playlist", "playlist_index": numero}
+        try:
+            if not faixa or not ydl.process_ie_result(faixa, extra_info=contexto):
+                raise ValueError("Faixa indisponível")
+        except (YoutubeDLError, OSError, ValueError) as erro:
+            falhas.append(f"{numero:02d} - {titulo} ({erro})")
+            orientacao = _orientacao_destino(erro)
+            if orientacao:
+                print(orientacao)
+                break
+        else:
+            salvos += 1
+    print(f"\nPlaylist: {salvos} de {total} na pasta '{pasta}'. Falhas: {len(falhas)}.")
+    pendentes = total - salvos - len(falhas)
+    if pendentes:
+        print(f"Itens pendentes: {pendentes}.")
+    for falha in falhas:
+        print(f"  {falha}")
+
+
+def baixar_video(url, qualidade="bestvideo*+bestaudio/best", pasta="downloads", *, playlist=None):
     """Baixa o vídeo com a qualidade especificada."""
-    _baixar(url, pasta, {"format": qualidade})
+    _baixar(url, pasta, {"format": qualidade}, playlist)
 
 
-def baixar_audio(url, pasta="downloads"):
+def baixar_audio(url, pasta="downloads", *, playlist=None):
     """Baixa apenas o áudio em formato MP3."""
     opcoes_mp3 = {
         "format": "bestaudio/best",
@@ -211,7 +308,7 @@ def baixar_audio(url, pasta="downloads"):
             "preferredquality": "192",
         }],
     }
-    _baixar(url, pasta, opcoes_mp3)
+    _baixar(url, pasta, opcoes_mp3, playlist)
 
 
 def progresso_hook(d):
@@ -230,25 +327,46 @@ def menu():
     print("   🎬 PEGAÍ — BAIXADOR DO YOUTUBE")
     print("=" * 50)
 
-    url = input("\nCole a URL do vídeo: ").strip()
+    url = input("\nCole a URL do vídeo ou da playlist: ").strip()
     if not url:
         print("❌ URL inválida.")
         return
 
-    print("\nO que deseja baixar?")
-    print("  1. Vídeo (melhor qualidade)")
-    print("  2. Vídeo (escolher qualidade)")
-    print("  3. Somente áudio (MP3)")
-    opcao = input("\nEscolha (1/2/3): ").strip()
-
-    pasta_padrao = pasta_downloads_padrao()
-    pasta = input(f"Pasta de destino (Enter para '{pasta_padrao}'): ").strip() or pasta_padrao
-
     try:
-        if opcao == "1":
-            print("\n🔍 Obtendo informações do vídeo...")
-            baixar_video(url, pasta=pasta)
+        url_playlist = _url_playlist(url)
+        print("\nO que deseja baixar?")
+        print("  1. Vídeo (melhor qualidade)")
+        print("  2. Vídeo (escolher qualidade)")
+        print("  3. Somente áudio (MP3)")
+        opcao = input("\nEscolha (1/2/3): ").strip()
+        if opcao not in ("1", "2", "3"):
+            print("❌ Opção inválida.")
+            return
 
+        pasta_padrao = Path(pasta_downloads_padrao())
+        playlist = None
+        if url_playlist:
+            print("Consultando playlist...")
+            playlist = _ler_playlist(url_playlist)
+            pasta_padrao /= _nome_pasta_playlist(playlist)
+        destino = input(f"Pasta de destino (Enter para '{pasta_padrao}'): ").strip()
+        pasta = os.path.expanduser(destino or str(pasta_padrao))
+
+        if opcao == "1":
+            baixar_video(url, pasta=pasta, playlist=playlist)
+
+        elif opcao == "2" and playlist is not None:
+            while True:
+                altura = input("Resolução máxima da playlist em pixels (ex.: 720 ou 1080): ").strip()
+                try:
+                    altura = int(altura)
+                except ValueError:
+                    altura = 0
+                if altura > 0:
+                    break
+                print("Digite uma altura válida, como 720.")
+            formato = f"bestvideo*[height<={altura}]+bestaudio/best[height<={altura}]"
+            baixar_video(url, qualidade=formato, pasta=pasta, playlist=playlist)
         elif opcao == "2":
             print("\n🔍 Listando qualidades disponíveis...")
             qualidades, titulo = listar_qualidades(url)
@@ -274,24 +392,21 @@ def menu():
                 formato = qualidades[opcoes[numero - 1]]
                 baixar_video(url, qualidade=formato, pasta=pasta)
 
-        elif opcao == "3":
+        else:
             print("\n🎵 Baixando áudio em MP3...")
             if not ffmpeg_instalado():
                 print("❌ FFmpeg não encontrado. Reinstale as dependências ou instale FFmpeg no sistema.")
                 return
-            else:
-                print("⚠️  FFmpeg encontrado. Iniciando conversão para MP3...")
-            baixar_audio(url, pasta=pasta)
+            baixar_audio(url, pasta=pasta, playlist=playlist)
 
-        else:
-            print("❌ Opção inválida.")
-            return
-
-        print(f"\n✅ Arquivo salvo na pasta: '{pasta}/'")
+        if playlist is None:
+            print(f"\n✅ Arquivo salvo na pasta: '{pasta}'")
 
     except Exception as e:
         print(f"\n❌ Erro: {e}")
-        print("Verifique se a URL é válida e tente novamente.")
+        orientacao = _orientacao_destino(e)
+        if orientacao:
+            print(orientacao)
 
 
 if __name__ == "__main__":

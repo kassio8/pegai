@@ -1,5 +1,6 @@
 #Script feito por Kássio Lima (ks) e ajuda do Copilot
 import contextlib
+import errno
 import importlib.util
 import io
 import os
@@ -8,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import call, patch
+from unittest.mock import MagicMock, call, patch
 
 
 SCRIPT_PATH = Path(__file__).with_name("baixar_youtube_autodetect.py")
@@ -203,6 +204,93 @@ class QualitySelectionTests(unittest.TestCase):
 
         download.assert_called_once_with("url", qualidade="18", pasta="destino")
         self.assertIn("falha no download", output.getvalue())
+
+
+class PlaylistTests(unittest.TestCase):
+    url = "https://www.youtube.com/playlist?list=PLteste"
+    info = {"title": "Meu álbum", "entries": [{"title": t} for t in ("Um", "Dois", "Três", "Quatro")]}
+
+    def test_mixed_links_ask_scope_but_direct_playlist_does_not(self):
+        with patch("builtins.input", side_effect=AssertionError):
+            self.assertEqual(downloader._url_playlist(self.url), self.url)
+            self.assertIsNone(downloader._url_playlist("https://youtube.com/watch?v=abc"))
+        for url in ("https://youtu.be/abc?list=PLteste", "https://music.youtube.com/watch?v=abc&list=PLteste"):
+            with self.subTest(url=url), patch("builtins.input", side_effect=["x", "2"]):
+                self.assertEqual(downloader._url_playlist(url), self.url)
+            with patch("builtins.input", return_value=""):
+                self.assertIsNone(downloader._url_playlist(url))
+
+    def test_playlist_destination_is_suggested_but_can_be_replaced(self):
+        for resposta in ("", "Minha pasta"):
+            with (
+                self.subTest(resposta=resposta),
+                patch("builtins.input", side_effect=[self.url, "3", resposta]) as prompt,
+                patch.object(downloader, "_ler_playlist", return_value=self.info),
+                patch.object(downloader, "pasta_downloads_padrao", return_value="Downloads"),
+                patch.object(downloader, "_nome_pasta_playlist", return_value="Meu álbum"),
+                patch.object(downloader, "ffmpeg_instalado", return_value=True),
+                patch.object(downloader, "baixar_audio") as baixar,
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                downloader.menu()
+            sugestao = str(Path("Downloads") / "Meu álbum")
+            self.assertIn(sugestao, prompt.call_args.args[0])
+            baixar.assert_called_once_with(self.url, pasta=resposta or sugestao, playlist=self.info)
+
+    def test_failed_track_keeps_order_and_later_tracks_download(self):
+        ydl_factory = MagicMock()
+        ydl = ydl_factory.return_value.__enter__.return_value
+        utils = SimpleNamespace(YoutubeDLError=RuntimeError)
+        modulo = SimpleNamespace(YoutubeDL=ydl_factory, utils=utils)
+        ydl.process_ie_result.side_effect = [{"id": "1"}, RuntimeError("privada"), None, {"id": "4"}]
+        with (
+            tempfile.TemporaryDirectory() as pasta,
+            patch.dict(sys.modules, {"yt_dlp": modulo, "yt_dlp.utils": utils}),
+            patch.object(downloader, "obter_caminho_ffmpeg", return_value=None),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+        ):
+            downloader.baixar_audio(self.url, pasta=pasta, playlist=self.info)
+        self.assertIn("%(playlist_index)02d", ydl_factory.call_args.args[0]["outtmpl"])
+        self.assertEqual([c.kwargs["extra_info"]["playlist_index"] for c in ydl.process_ie_result.call_args_list],
+                         [1, 2, 3, 4])
+        resumo = output.getvalue().split("Playlist:")[-1]
+        for trecho in ("2 de 4", "Falhas: 2", "02 - Dois", "03 - Três"):
+            self.assertIn(trecho, resumo)
+
+    def test_permission_error_guides_user_to_another_folder(self):
+        with (
+            patch("builtins.input", side_effect=["https://youtu.be/abc", "1", "destino"]),
+            patch.object(downloader, "baixar_video", side_effect=PermissionError(errno.EACCES, "negado")),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+        ):
+            downloader.menu()
+        self.assertIn("pasta com acesso de escrita", output.getvalue())
+        self.assertNotIn("Arquivo salvo", output.getvalue())
+
+    @unittest.skipUnless(importlib.util.find_spec("yt_dlp"), "Requer o yt-dlp da venv do projeto")
+    def test_yt_dlp_keeps_real_playlist_numbers_in_filenames(self):
+        from yt_dlp import YoutubeDL
+
+        options = {"outtmpl": "%(playlist_index)02d - " + downloader.NOME_ARQUIVO,
+                   "quiet": True, "simulate": True}
+        entrada = {"id": "abc", "title": "Música", "url": "https://example.invalid/musica.mp4",
+                   "extractor": "teste", "extractor_key": "Teste"}
+        with YoutubeDL(options) as ydl, contextlib.redirect_stdout(io.StringIO()) as output:
+            downloader._baixar_faixas(ydl, {"title": "Álbum", "entries": [None, entrada]}, "destino")
+            self.assertIn("1 de 2", output.getvalue())
+            self.assertEqual(ydl.prepare_filename(entrada), "02 - Música [abc].mp4")
+
+    def test_playlist_quality_cap_applies_to_every_video(self):
+        with (
+            patch("builtins.input", side_effect=[self.url, "2", "destino", "zero", "720"]),
+            patch.object(downloader, "_ler_playlist", return_value=self.info),
+            patch.object(downloader, "_nome_pasta_playlist", return_value="Meu álbum"),
+            patch.object(downloader, "baixar_video") as baixar,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            downloader.menu()
+        baixar.assert_called_once_with(self.url, qualidade="bestvideo*[height<=720]+bestaudio/best[height<=720]",
+                                       pasta="destino", playlist=self.info)
 
 
 class FfmpegTests(unittest.TestCase):
