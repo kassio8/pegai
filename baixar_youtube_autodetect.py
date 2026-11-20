@@ -177,14 +177,13 @@ def listar_qualidades(url):
         return qualidades, info.get("title", "video")
 
 
-def baixar_video(url, qualidade="bestvideo*+bestaudio/best", pasta="downloads"):
-    """Baixa o vídeo com a qualidade especificada."""
+def _baixar(url, pasta, opcoes_formato):
     import yt_dlp
 
     os.makedirs(pasta, exist_ok=True)
 
     ydl_opts = {
-        "format": qualidade,
+        **opcoes_formato,
         "outtmpl": os.path.join(pasta, NOME_ARQUIVO),
         "progress_hooks": [progresso_hook],
         "noplaylist": True,
@@ -197,30 +196,22 @@ def baixar_video(url, qualidade="bestvideo*+bestaudio/best", pasta="downloads"):
         ydl.download([url])
 
 
+def baixar_video(url, qualidade="bestvideo*+bestaudio/best", pasta="downloads"):
+    """Baixa o vídeo com a qualidade especificada."""
+    _baixar(url, pasta, {"format": qualidade})
+
+
 def baixar_audio(url, pasta="downloads"):
     """Baixa apenas o áudio em formato MP3."""
-    import yt_dlp
-
-    os.makedirs(pasta, exist_ok=True)
-
-    ydl_opts = {
+    opcoes_mp3 = {
         "format": "bestaudio/best",
-        "outtmpl": os.path.join(pasta, NOME_ARQUIVO),
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "mp3",
             "preferredquality": "192",
         }],
-        "progress_hooks": [progresso_hook],
-        "noplaylist": True,
     }
-
-    ffmpeg_path = obter_caminho_ffmpeg()
-    if ffmpeg_path:
-        ydl_opts["ffmpeg_location"] = ffmpeg_path
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+    _baixar(url, pasta, opcoes_mp3)
 
 
 def progresso_hook(d):
