@@ -13,6 +13,7 @@ from pathlib import Path
 
 INSTALL_PACKAGES = ("yt-dlp[default,deno]", "imageio-ffmpeg")
 REQUIRED_DISTRIBUTIONS = ("yt-dlp", "yt-dlp-ejs", "deno", "imageio-ffmpeg")
+NOME_ARQUIVO = "%(title)s [%(id)s].%(ext)s"
 
 
 def _venv_dir():
@@ -24,12 +25,15 @@ def _venv_python(venv_dir):
 
 
 def _python_is_supported(python):
-    result = subprocess.run(
-        [str(python), "-c", "import sys; raise SystemExit(sys.version_info < (3, 11))"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            [str(python), "-c", "import sys; raise SystemExit(sys.version_info < (3, 11) or sys.prefix == sys.base_prefix)"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        return False
     return result.returncode == 0
 
 
@@ -62,12 +66,14 @@ def instalar_ytdlp():
 
     venv_dir = _venv_dir()
     venv_python = _venv_python(venv_dir)
-    if not venv_python.is_file() or not _python_is_supported(venv_python):
+    if not os.path.lexists(venv_dir):
         print("Criando ambiente virtual...", flush=True)
-        args = [sys.executable, "-m", "venv"]
-        if venv_dir.exists():
-            args.append("--clear")
-        subprocess.check_call([*args, str(venv_dir)])
+        subprocess.check_call([sys.executable, "-m", "venv", str(venv_dir)])
+    elif not venv_python.is_file() or not _python_is_supported(venv_python):
+        raise RuntimeError(
+            f"O ambiente em '{venv_dir}' precisa de um Python 3.11+ funcional. "
+            "Renomeie .venv para um nome livre, como .venv.backup, e execute novamente."
+        )
 
     if not _dependencies_installed(venv_python):
         print("Instalando dependências do projeto...", flush=True)
@@ -123,13 +129,18 @@ def listar_qualidades(url):
     """Lista as qualidades disponíveis para o vídeo."""
     import yt_dlp
 
-    ydl_opts = {"quiet": True, "no_warnings": True}
+    ydl_opts = {"quiet": True, "no_warnings": True, "noplaylist": True}
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
         formatos = info.get("formats", [])
 
         print(f"\n📹 Título: {info.get('title', 'Desconhecido')}")
-        print(f"⏱  Duração: {info.get('duration', 0) // 60}min {info.get('duration', 0) % 60}s")
+        duracao = info.get("duration")
+        if duracao is None:
+            print("⏱  Duração indisponível")
+        else:
+            minutos, segundos = divmod(int(duracao), 60)
+            print(f"⏱  Duração: {minutos}min {segundos}s")
         print(f"👤 Canal: {info.get('uploader', 'Desconhecido')}\n")
 
         qualidades = {}
@@ -174,7 +185,7 @@ def baixar_video(url, qualidade="bestvideo*+bestaudio/best", pasta="downloads"):
 
     ydl_opts = {
         "format": qualidade,
-        "outtmpl": os.path.join(pasta, "%(title)s.%(ext)s"),
+        "outtmpl": os.path.join(pasta, NOME_ARQUIVO),
         "progress_hooks": [progresso_hook],
         "noplaylist": True,
     }
@@ -194,7 +205,7 @@ def baixar_audio(url, pasta="downloads"):
 
     ydl_opts = {
         "format": "bestaudio/best",
-        "outtmpl": os.path.join(pasta, "%(title)s.%(ext)s"),
+        "outtmpl": os.path.join(pasta, NOME_ARQUIVO),
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "mp3",
@@ -260,14 +271,17 @@ def menu():
                 for i, q in enumerate(opcoes, 1):
                     print(f"  {i}. {q}")
 
-                escolha = input("\nEscolha o número da qualidade: ").strip()
-                try:
-                    idx = int(escolha) - 1
-                    formato = qualidades[opcoes[idx]]
-                    baixar_video(url, qualidade=formato, pasta=pasta)
-                except (ValueError, IndexError):
-                    print("Opção inválida. Baixando na melhor qualidade...")
-                    baixar_video(url, pasta=pasta)
+                while True:
+                    escolha = input("\nEscolha o número da qualidade: ").strip()
+                    try:
+                        numero = int(escolha)
+                    except ValueError:
+                        numero = 0
+                    if 1 <= numero <= len(opcoes):
+                        break
+                    print(f"Opção inválida. Digite um número de 1 a {len(opcoes)}.")
+                formato = qualidades[opcoes[numero - 1]]
+                baixar_video(url, qualidade=formato, pasta=pasta)
 
         elif opcao == "3":
             print("\n🎵 Baixando áudio em MP3...")

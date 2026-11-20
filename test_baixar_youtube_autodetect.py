@@ -100,36 +100,41 @@ class InstallYtDlpTests(unittest.TestCase):
         check_call.assert_not_called()
         execv.assert_called_once_with(str(venv_python), [str(venv_python), script_path])
 
-    def test_recreates_existing_venv_with_unsupported_python(self):
+    def test_preserves_existing_directory_with_missing_or_unsupported_python(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             venv_dir = Path(temp_dir) / ".venv"
             venv_python = venv_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
             venv_python.parent.mkdir(parents=True)
-            venv_python.touch()
+            arquivo = venv_dir / "pessoal.txt"
+            arquivo.write_text("preservar", encoding="utf-8")
 
             with (
                 patch.object(sys, "version_info", (3, 12, 0)),
                 patch.object(sys, "prefix", "/usr"),
                 patch.object(sys, "base_prefix", "/usr"),
-                patch.object(sys, "argv", [str(SCRIPT_PATH)]),
                 patch.object(downloader, "_venv_dir", return_value=venv_dir),
                 patch.object(downloader, "_python_is_supported", return_value=False),
-                patch.object(downloader, "_dependencies_installed", return_value=True),
                 patch("subprocess.check_call") as check_call,
-                patch("os.execv"),
+                patch("os.execv") as execv,
             ):
-                downloader.instalar_ytdlp()
-
-        check_call.assert_called_once_with(
-            [sys.executable, "-m", "venv", "--clear", str(venv_dir)]
-        )
+                for has_python in (False, True):
+                    with self.subTest(has_python=has_python):
+                        if has_python:
+                            venv_python.touch()
+                        with self.assertRaisesRegex(RuntimeError, r"\.venv\.backup"):
+                            downloader.instalar_ytdlp()
+                        check_call.assert_not_called()
+                        execv.assert_not_called()
+                        self.assertEqual(arquivo.read_text(encoding="utf-8"), "preservar")
 
 
 class QualitySelectionTests(unittest.TestCase):
     def test_quality_selectors_keep_audio_formats_correct(self):
+        captured = {}
+
         class FakeYoutubeDL:
             def __init__(self, options):
-                pass
+                captured.update(options)
 
             def __enter__(self):
                 return self
@@ -140,7 +145,7 @@ class QualitySelectionTests(unittest.TestCase):
             def extract_info(self, url, download):
                 return {
                     "title": "Teste",
-                    "duration": 90,
+                    "duration": None,
                     "uploader": "Canal",
                     "formats": [
                         {
@@ -163,17 +168,19 @@ class QualitySelectionTests(unittest.TestCase):
 
         with (
             patch.dict(sys.modules, {"yt_dlp": SimpleNamespace(YoutubeDL=FakeYoutubeDL)}),
-            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stdout(io.StringIO()) as output,
         ):
-            qualities, _ = downloader.listar_qualidades("https://example.invalid/video")
+            qualities, _ = downloader.listar_qualidades("https://example.invalid/watch?v=1&list=2")
 
+        self.assertTrue(captured["noplaylist"])
+        self.assertIn("Duração indisponível", output.getvalue())
         self.assertEqual(qualities["360p (com áudio)"], "18")
         self.assertEqual(qualities["1080p 30fps (só vídeo)"], "137+bestaudio/best")
 
     def test_menu_passes_selected_selector_without_duplicating_audio(self):
         selector = "137+bestaudio/best"
         with (
-            patch("builtins.input", side_effect=["https://example.invalid/video", "2", "", "1"]),
+            patch("builtins.input", side_effect=["https://example.invalid/video", "2", "", "0", "-1", "2", "x", "1"]),
             patch.object(downloader, "pasta_downloads_padrao", return_value="/tmp/downloads"),
             patch.object(downloader, "listar_qualidades", return_value=({"1080p": selector}, "Teste")),
             patch.object(downloader, "baixar_video") as download,
@@ -184,6 +191,18 @@ class QualitySelectionTests(unittest.TestCase):
         download.assert_called_once_with(
             "https://example.invalid/video", qualidade=selector, pasta="/tmp/downloads"
         )
+
+    def test_download_error_does_not_retry_with_another_quality(self):
+        with (
+            patch("builtins.input", side_effect=["url", "2", "destino", "1"]),
+            patch.object(downloader, "listar_qualidades", return_value=({"360p": "18"}, "Teste")),
+            patch.object(downloader, "baixar_video", side_effect=ValueError("falha no download")) as download,
+            contextlib.redirect_stdout(io.StringIO()) as output,
+        ):
+            downloader.menu()
+
+        download.assert_called_once_with("url", qualidade="18", pasta="destino")
+        self.assertIn("falha no download", output.getvalue())
 
 
 class FfmpegTests(unittest.TestCase):
@@ -221,6 +240,7 @@ class FfmpegTests(unittest.TestCase):
             downloader.baixar_video("https://example.invalid/video")
 
         self.assertEqual(captured["options"]["format"], "bestvideo*+bestaudio/best")
+        self.assertEqual(Path(captured["options"]["outtmpl"]).name, "%(title)s [%(id)s].%(ext)s")
         self.assertEqual(captured["options"]["ffmpeg_location"], "/venv/ffmpeg")
 
     def test_audio_download_uses_portable_ffmpeg(self):
@@ -248,6 +268,7 @@ class FfmpegTests(unittest.TestCase):
 
         self.assertEqual(captured["options"]["ffmpeg_location"], "/venv/ffmpeg")
         self.assertEqual(captured["options"]["postprocessors"][0]["preferredcodec"], "mp3")
+        self.assertEqual(Path(captured["options"]["outtmpl"]).name, "%(title)s [%(id)s].%(ext)s")
 
 
 if __name__ == "__main__":
