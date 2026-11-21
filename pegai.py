@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Pegaí: baixador de vídeos do YouTube usando yt-dlp
-Uso: python baixar_youtube_autodetect.py
+Uso: python pegai.py
 Na primeira execução, cria uma venv e instala yt-dlp, Deno e FFmpeg portátil.
 """
 

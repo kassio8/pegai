@@ -12,8 +12,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 
-SCRIPT_PATH = Path(__file__).with_name("baixar_youtube_autodetect.py")
-SPEC = importlib.util.spec_from_file_location("baixar_youtube_autodetect", SCRIPT_PATH)
+SCRIPT_PATH = Path(__file__).with_name("pegai.py")
+SPEC = importlib.util.spec_from_file_location("pegai", SCRIPT_PATH)
 downloader = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(downloader)
 

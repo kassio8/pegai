@@ -9,13 +9,13 @@ Baixe vídeos do YouTube ou transforme uma **playlist inteira de músicas em MP3
 Você precisa de **Python 3.11 ou superior**, conexão com a internet e permissão para gravar nas pastas do projeto e dos downloads.
 
 1. Baixe e extraia o ZIP do projeto ou clone o repositório com `git clone https://github.com/kassio8/pegai.git`.
-2. Abra o terminal na pasta que contém `baixar_youtube_autodetect.py`.
+2. Abra o terminal na pasta que contém `pegai.py`.
 3. Execute o comando do seu sistema.
 
 | Sistema | Comando |
 | --- | --- |
-| Windows | `py baixar_youtube_autodetect.py` |
-| macOS ou Linux | `python3 baixar_youtube_autodetect.py` |
+| Windows | `py pegai.py` |
+| macOS ou Linux | `python3 pegai.py` |
 
 Na primeira execução, o Pegaí prepara o ambiente e instala o yt-dlp, o Deno e uma versão portátil do FFmpeg. Quando o menu aparecer, cole o link do YouTube e escolha o que deseja baixar.
 
