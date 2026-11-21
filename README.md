@@ -36,8 +36,6 @@ Na primeira execução, o Pegaí prepara o ambiente e instala o yt-dlp, o Deno e
 
 Os arquivos recebem o número de cada vídeo na lista, como `01 - Até Amanhã [lJY-xj-SBhk].mp3`. Se uma faixa estiver indisponível ou falhar na conversão, o Pegaí segue para a próxima e mantém a numeração original. Ao final, mostra quantos itens ficaram salvos e identifica as falhas por número e título.
 
-No teste com **PRODUTO DO AMBIENTE MIXTAPE**, os 12 vídeos geraram 12 MP3 a 192 kbps, totalizando 101 MB. Foram 11 faixas individuais e um arquivo de 35 minutos, porque a playlist também inclui um vídeo com a mixtape completa. [Ver a playlist do teste](https://www.youtube.com/playlist?list=PLvnkn1Ox2UftPf21azpttWSZJfqK0EDK9)
-
 ## Onde ficam os arquivos?
 
 O menu mostra a pasta de destino antes de baixar. O Pegaí procura `Downloads` ou `Download` na sua pasta de usuário. Se nenhuma delas existir, usa a pasta de usuário como base. Para playlists, acrescenta o nome da lista à sugestão. Um caminho digitado por você é usado diretamente. O Pegaí cria a pasta escolhida se necessário.
